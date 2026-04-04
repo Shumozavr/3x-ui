@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/util/crypto"
@@ -44,6 +46,7 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.POST("/updateUser", a.updateUser)
 	g.POST("/restartPanel", a.restartPanel)
 	g.GET("/getDefaultJsonConfig", a.getDefaultXrayConfig)
+	g.POST("/processRoutingGeo", a.processRoutingGeo)
 }
 
 // getAllSetting retrieves all current settings.
@@ -108,6 +111,44 @@ func (a *SettingController) updateUser(c *gin.Context) {
 func (a *SettingController) restartPanel(c *gin.Context) {
 	err := a.panelService.RestartPanel(time.Second * 3)
 	jsonMsg(c, I18nWeb(c, "pages.settings.restartPanelSuccess"), err)
+}
+
+// processRoutingGeo downloads, filters, and saves geo dat files based on the
+// current subRoutingRules happ URL. The Geoipurl/Geositeurl inside the URL are
+// updated to point to the sub server's /geodata/ endpoints, and the result is
+// written back to subRoutingRules. File metadata is stored in subRoutingGeoInfo.
+func (a *SettingController) processRoutingGeo(c *gin.Context) {
+	routingRules, err := a.settingService.GetSubRoutingRules()
+	if err != nil || strings.TrimSpace(routingRules) == "" {
+		jsonMsg(c, "processRoutingGeo", errors.New("subRoutingRules is empty"))
+		return
+	}
+
+	subBaseURL, err := a.settingService.GetSubBaseURL()
+	if err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+
+	geoSvc := service.GeoFilterService{}
+	newRules, info, err := geoSvc.ProcessGeoFiles(routingRules, subBaseURL)
+	if err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+
+	if err := a.settingService.SaveSubRoutingRules(newRules); err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+
+	infoJSON, _ := json.Marshal(info)
+	if err := a.settingService.SetSubRoutingGeoInfo(string(infoJSON)); err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+
+	jsonObj(c, info, nil)
 }
 
 // getDefaultXrayConfig retrieves the default Xray configuration.
