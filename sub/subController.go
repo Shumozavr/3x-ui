@@ -26,10 +26,33 @@ type SUBController struct {
 	clashEnabled     bool
 	subEncrypt       bool
 	updateInterval   string
+	subCustomHeaders map[string]string
 
 	subService      *SubService
 	subJsonService  *SubJsonService
 	subClashService *SubClashService
+}
+
+// parseCustomHeaders parses a multiline string of "Name: Value" header pairs
+// into a map. Lines that are blank or malformed (no colon) are silently skipped.
+func parseCustomHeaders(raw string) map[string]string {
+	result := make(map[string]string)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		idx := strings.IndexByte(line, ':')
+		if idx <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+		if name != "" {
+			result[name] = value
+		}
+	}
+	return result
 }
 
 // NewSUBController creates a new subscription controller with the given configuration.
@@ -54,6 +77,7 @@ func NewSUBController(
 	subAnnounce string,
 	subEnableRouting bool,
 	subRoutingRules string,
+	subCustomHeaders string,
 ) *SUBController {
 	sub := NewSubService(showInfo, rModel)
 	a := &SUBController{
@@ -70,6 +94,7 @@ func NewSUBController(
 		clashEnabled:     clashEnabled,
 		subEncrypt:       encrypt,
 		updateInterval:   update,
+		subCustomHeaders: parseCustomHeaders(subCustomHeaders),
 
 		subService:      sub,
 		subJsonService:  NewSubJsonService(jsonFragment, jsonNoise, jsonMux, jsonRules, sub),
@@ -163,7 +188,7 @@ func (a *SUBController) subs(c *gin.Context) {
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subCustomHeaders)
 
 		if a.subEncrypt {
 			c.String(200, base64.StdEncoding.EncodeToString([]byte(result)))
@@ -185,7 +210,7 @@ func (a *SUBController) subJsons(c *gin.Context) {
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subCustomHeaders)
 
 		c.String(200, jsonSub)
 	}
@@ -218,6 +243,7 @@ func (a *SUBController) ApplyCommonHeaders(
 	profileAnnounce string,
 	profileEnableRouting bool,
 	profileRoutingRules string,
+	customHeaders map[string]string,
 ) {
 	c.Writer.Header().Set("Subscription-Userinfo", header)
 	c.Writer.Header().Set("Profile-Update-Interval", updateInterval)
@@ -240,5 +266,10 @@ func (a *SUBController) ApplyCommonHeaders(
 	c.Writer.Header().Set("Routing-Enable", strconv.FormatBool(profileEnableRouting))
 	if profileRoutingRules != "" {
 		c.Writer.Header().Set("Routing", profileRoutingRules)
+	}
+
+	// Custom headers (user-defined, applied last so they can override defaults if needed)
+	for name, value := range customHeaders {
+		c.Writer.Header().Set(name, value)
 	}
 }

@@ -78,6 +78,7 @@ var defaultValueMap = map[string]string{
 	"subJsonNoises":               "",
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
+	"subCustomHeaders":            "",
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"nord":                        "",
@@ -590,6 +591,10 @@ func (s *SettingService) GetSubJsonMux() (string, error) {
 
 func (s *SettingService) GetSubJsonRules() (string, error) {
 	return s.getString("subJsonRules")
+}
+
+func (s *SettingService) GetSubCustomHeaders() (string, error) {
+	return s.getString("subCustomHeaders")
 }
 
 func (s *SettingService) GetDatepicker() (string, error) {

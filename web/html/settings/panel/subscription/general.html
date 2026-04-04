@@ -145,6 +145,14 @@
                     placeholder="happ://routing/add/..."></a-textarea>
             </template>
         </a-setting-list-item>
+        <a-divider>{{ i18n "pages.settings.subCustomHeadersDivider"}}</a-divider>
+        <a-setting-list-item paddings="small">
+            <template #title>{{ i18n "pages.settings.subCustomHeaders"}}</template>
+            <template #description>{{ i18n "pages.settings.subCustomHeadersDesc"}}</template>
+            <template #control>
+                <a-textarea v-model="allSetting.subCustomHeaders" :auto-size="{ minRows: 3 }" placeholder="X-Custom-Header: value&#10;Another-Header: value"></a-textarea>
+            </template>
+        </a-setting-list-item>
     </a-collapse-panel>
     <a-collapse-panel key="3" header='{{ i18n "pages.settings.certs" }}'>
         <a-setting-list-item paddings="small">
