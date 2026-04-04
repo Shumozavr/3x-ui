@@ -80,7 +80,8 @@ type AllSetting struct {
 	SubJsonNoises               string `json:"subJsonNoises" form:"subJsonNoises"`                             // JSON subscription noise configuration
 	SubJsonMux                  string `json:"subJsonMux" form:"subJsonMux"`                                   // JSON subscription mux configuration
 	SubJsonRules                string `json:"subJsonRules" form:"subJsonRules"`
-	SubCustomHeaders            string `json:"subCustomHeaders" form:"subCustomHeaders"` // Custom HTTP headers to add to subscription responses (one per line, format: "Name: Value")
+	SubCustomHeaders            string `json:"subCustomHeaders" form:"subCustomHeaders"`   // Custom HTTP headers to add to subscription responses (one per line, format: "Name: Value")
+	SubRoutingGeoInfo           string `json:"subRoutingGeoInfo" form:"subRoutingGeoInfo"` // JSON metadata for filtered geo files (managed by processRoutingGeo, not user-editable)
 
 	// LDAP settings
 	LdapEnable     bool   `json:"ldapEnable" form:"ldapEnable"`

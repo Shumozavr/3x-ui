@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -76,6 +77,7 @@ var defaultValueMap = map[string]string{
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
 	"subCustomHeaders":            "",
+	"subRoutingGeoInfo":           "",
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"externalTrafficInformEnable": "false",
@@ -574,6 +576,45 @@ func (s *SettingService) GetSubJsonRules() (string, error) {
 
 func (s *SettingService) GetSubCustomHeaders() (string, error) {
 	return s.getString("subCustomHeaders")
+}
+
+func (s *SettingService) GetSubRoutingGeoInfo() (string, error) {
+	return s.getString("subRoutingGeoInfo")
+}
+
+func (s *SettingService) SetSubRoutingGeoInfo(info string) error {
+	return s.setString("subRoutingGeoInfo", info)
+}
+
+func (s *SettingService) SaveSubRoutingRules(rules string) error {
+	return s.setString("subRoutingRules", rules)
+}
+
+// GetSubBaseURL derives the subscription server's base URL (scheme://host:port)
+// from the configured subURI or subDomain+subPort settings.
+// Returns an empty string if the domain is not configured.
+func (s *SettingService) GetSubBaseURL() (string, error) {
+	subURI, _ := s.GetSubURI()
+	if subURI != "" {
+		if u, err := url.Parse(subURI); err == nil && u.Host != "" {
+			return u.Scheme + "://" + u.Host, nil
+		}
+	}
+	subDomain, _ := s.GetSubDomain()
+	if subDomain == "" {
+		return "", nil
+	}
+	subPort, err := s.GetSubPort()
+	if err != nil {
+		return "", err
+	}
+	subCert, _ := s.GetSubCertFile()
+	subKey, _ := s.GetSubKeyFile()
+	scheme := "http"
+	if subCert != "" && subKey != "" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, subDomain, subPort), nil
 }
 
 func (s *SettingService) GetDatepicker() (string, error) {

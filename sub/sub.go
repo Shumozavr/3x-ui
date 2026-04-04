@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/util/common"
 	webpkg "github.com/mhsanaei/3x-ui/v2/web"
@@ -258,6 +259,24 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 
 	g := engine.Group("/")
+
+	// Serve filtered geo dat files produced by the processRoutingGeo endpoint.
+	engine.GET("/geodata/geoip.dat", func(c *gin.Context) {
+		p := config.GetBinFolderPath() + "/sub_geoip.dat"
+		if _, err := os.Stat(p); err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.File(p)
+	})
+	engine.GET("/geodata/geosite.dat", func(c *gin.Context) {
+		p := config.GetBinFolderPath() + "/sub_geosite.dat"
+		if _, err := os.Stat(p); err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.File(p)
+	})
 
 	s.sub = NewSUBController(
 		g, LinksPath, JsonPath, subJsonEnable, Encrypt, ShowInfo, RemarkModel, SubUpdates,

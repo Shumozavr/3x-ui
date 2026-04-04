@@ -34,6 +34,7 @@ class AllSetting {
         this.subAnnounce = "";
         this.subEnableRouting = true;
         this.subRoutingRules = "";
+        this.subRoutingGeoInfo = "";
         this.subCustomHeaders = "";
         this.subListen = "";
         this.subPort = 2096;
