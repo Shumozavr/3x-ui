@@ -25,7 +25,7 @@ jobs:
     name: Analyze Go code
     permissions:
       contents: read
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -55,12 +55,7 @@ jobs:
           version: "latest"
           install-go: false
 
-      - name: Install gcc
-        run: sudo apt-get install -y gcc
-
       - name: Run tests
-        env:
-          CGO_ENABLED: "1"
         run: go test -race -shuffle=on ./...
 
   build:
@@ -77,7 +72,7 @@ jobs:
           - 386
           - armv5
           - s390x
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -203,7 +198,7 @@ jobs:
       matrix:
         platform:
           - amd64
-    runs-on: self-hosted
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
