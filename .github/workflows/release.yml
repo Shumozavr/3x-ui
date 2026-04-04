@@ -56,6 +56,8 @@ jobs:
           install-go: false
 
       - name: Run tests
+        env:
+          CGO_ENABLED: "1"
         run: go test -race -shuffle=on ./...
 
   build:
