@@ -142,14 +142,9 @@
                 "pages.settings.subRoutingRulesDesc"}}</template>
             <template #control>
                 <a-textarea v-model="allSetting.subRoutingRules" placeholder="happ://routing/add/..."></a-textarea>
-                <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <a-button size="small" @click="processRoutingGeo" :disabled="!allSetting.subRoutingRules">
-                        {{ i18n "pages.settings.subRoutingGeoProcess"}}
-                    </a-button>
-                    <span v-if="parseGeoInfo(allSetting.subRoutingGeoInfo)" style="font-size:12px;opacity:.75">
-                        [[ geoInfoSummary(allSetting.subRoutingGeoInfo) ]]
-                    </span>
-                </div>
+                <span v-if="parseGeoInfo(allSetting.subRoutingGeoInfo)" style="font-size:12px;opacity:.75;display:block;margin-top:4px">
+                    [[ geoInfoSummary(allSetting.subRoutingGeoInfo) ]]
+                </span>
             </template>
         </a-setting-list-item>
         <a-divider>{{ i18n "pages.settings.subCustomHeadersDivider"}}</a-divider>

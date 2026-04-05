@@ -271,14 +271,6 @@
           await this.getAllSetting();
         }
       },
-      async processRoutingGeo() {
-        this.loading(true);
-        const msg = await HttpUtil.post("/panel/setting/processRoutingGeo");
-        this.loading(false);
-        if (msg.success) {
-          await this.getAllSetting();
-        }
-      },
       async updateUser() {
         const sendUpdateUserRequest = async () => {
           this.loading(true);

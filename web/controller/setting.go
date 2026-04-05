@@ -46,7 +46,6 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.POST("/updateUser", a.updateUser)
 	g.POST("/restartPanel", a.restartPanel)
 	g.GET("/getDefaultJsonConfig", a.getDefaultXrayConfig)
-	g.POST("/processRoutingGeo", a.processRoutingGeo)
 }
 
 // getAllSetting retrieves all current settings.
@@ -106,35 +105,6 @@ func (a *SettingController) runGeoProcessing(routingRules string) {
 	infoJSON, _ := json.Marshal(info)
 	_ = a.settingService.SetSubRoutingGeoInfo(string(infoJSON))
 	_ = a.settingService.SetSubGeoEtags(etags)
-}
-
-// processRoutingGeo triggers an immediate (synchronous) geo file processing and
-// returns the file metadata. The original subRoutingRules value is never modified.
-func (a *SettingController) processRoutingGeo(c *gin.Context) {
-	routingRules, err := a.settingService.GetSubRoutingRules()
-	if err != nil || strings.TrimSpace(routingRules) == "" {
-		jsonMsg(c, "processRoutingGeo", errors.New("subRoutingRules is empty"))
-		return
-	}
-
-	geoSvc := service.GeoFilterService{}
-	info, etags, err := geoSvc.ProcessGeoFiles(routingRules)
-	if err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-
-	infoJSON, _ := json.Marshal(info)
-	if err := a.settingService.SetSubRoutingGeoInfo(string(infoJSON)); err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-	if err := a.settingService.SetSubGeoEtags(etags); err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-
-	jsonObj(c, info, nil)
 }
 
 // updateUser updates the current user's username and password.
