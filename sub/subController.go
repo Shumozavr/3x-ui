@@ -2,14 +2,21 @@ package sub
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/web/service"
 
 	"github.com/gin-gonic/gin"
 )
+
+const geoCheckInterval = 5 * time.Minute
 
 // SUBController handles HTTP requests for subscription links and JSON configurations.
 type SUBController struct {
@@ -19,12 +26,20 @@ type SUBController struct {
 	subAnnounce      string
 	subEnableRouting bool
 	subRoutingRules  string
+	subBaseURL       string
 	subPath          string
 	subJsonPath      string
 	jsonEnabled      bool
 	subEncrypt       bool
 	updateInterval   string
 	subCustomHeaders map[string]string
+
+	settingSvc service.SettingService
+	geoSvc     service.GeoFilterService
+
+	geoMu          sync.Mutex
+	geoLastChecked time.Time
+	geoRefreshing  bool
 
 	subService     *SubService
 	subJsonService *SubJsonService
@@ -73,6 +88,7 @@ func NewSUBController(
 	subEnableRouting bool,
 	subRoutingRules string,
 	subCustomHeaders string,
+	subBaseURL string,
 ) *SUBController {
 	sub := NewSubService(showInfo, rModel)
 	a := &SUBController{
@@ -82,6 +98,7 @@ func NewSUBController(
 		subAnnounce:      subAnnounce,
 		subEnableRouting: subEnableRouting,
 		subRoutingRules:  subRoutingRules,
+		subBaseURL:       subBaseURL,
 		subPath:          subPath,
 		subJsonPath:      jsonPath,
 		jsonEnabled:      jsonEnabled,
@@ -107,6 +124,76 @@ func (a *SUBController) initRouter(g *gin.RouterGroup) {
 	}
 }
 
+// effectiveRoutingRules returns the routing URL to put in the Routing header.
+// If local shrunken geo files exist, Geoipurl/Geositeurl are substituted with
+// the sub server's /geodata/ paths. Returns empty string on any error.
+func (a *SUBController) effectiveRoutingRules() string {
+	if a.subRoutingRules == "" || a.subBaseURL == "" {
+		return a.subRoutingRules
+	}
+	modified, err := a.geoSvc.BuildModifiedRoutingURL(a.subRoutingRules, a.subBaseURL)
+	if err != nil {
+		return ""
+	}
+	return modified
+}
+
+// maybeRefreshGeoFiles triggers an ETag-based background refresh at most once
+// per geoCheckInterval. Safe to call on every subscription request.
+func (a *SUBController) maybeRefreshGeoFiles() {
+	if a.subRoutingRules == "" {
+		return
+	}
+	if time.Since(a.geoLastChecked) < geoCheckInterval || a.geoRefreshing {
+		return
+	}
+	a.geoMu.Lock()
+	if time.Since(a.geoLastChecked) < geoCheckInterval || a.geoRefreshing {
+		a.geoMu.Unlock()
+		return
+	}
+	a.geoLastChecked = time.Now()
+	a.geoRefreshing = true
+	a.geoMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.geoMu.Lock()
+			a.geoRefreshing = false
+			a.geoMu.Unlock()
+		}()
+		a.doGeoRefresh()
+	}()
+}
+
+// doGeoRefresh reads stored ETags from the DB, performs conditional downloads,
+// and if either file changed, writes new files and updates the DB.
+func (a *SUBController) doGeoRefresh() {
+	knownEtags, err := a.settingSvc.GetSubGeoEtags()
+	if err != nil {
+		logger.Warning("geo refresh: read etags:", err)
+		return
+	}
+
+	refreshed, info, newEtags, err := a.geoSvc.RefreshIfStale(a.subRoutingRules, knownEtags)
+	if err != nil {
+		logger.Warning("geo refresh:", err)
+		return
+	}
+	if !refreshed {
+		// ETags may have been returned even without content change; persist them.
+		if newEtags != knownEtags {
+			_ = a.settingSvc.SetSubGeoEtags(newEtags)
+		}
+		return
+	}
+
+	infoJSON, _ := json.Marshal(info)
+	_ = a.settingSvc.SetSubRoutingGeoInfo(string(infoJSON))
+	_ = a.settingSvc.SetSubGeoEtags(newEtags)
+	logger.Info("geo files refreshed: geoip", info.GeoipSize, "B geosite", info.GeositeSize, "B")
+}
+
 // subs handles HTTP requests for subscription links, returning either HTML page or base64-encoded subscription data.
 func (a *SUBController) subs(c *gin.Context) {
 	subId := c.Param("subid")
@@ -123,22 +210,18 @@ func (a *SUBController) subs(c *gin.Context) {
 		// If the request expects HTML (e.g., browser) or explicitly asked (?html=1 or ?view=html), render the info page here
 		accept := c.GetHeader("Accept")
 		if strings.Contains(strings.ToLower(accept), "text/html") || c.Query("html") == "1" || strings.EqualFold(c.Query("view"), "html") {
-			// Build page data in service
 			subURL, subJsonURL := a.subService.BuildURLs(scheme, hostWithPort, a.subPath, a.subJsonPath, subId)
 			if !a.jsonEnabled {
 				subJsonURL = ""
 			}
-			// Get base_path from context (set by middleware)
 			basePath, exists := c.Get("base_path")
 			if !exists {
 				basePath = "/"
 			}
-			// Add subId to base_path for asset URLs
 			basePathStr := basePath.(string)
 			if basePathStr == "/" {
 				basePathStr = "/" + subId + "/"
 			} else {
-				// Remove trailing slash if exists, add subId, then add trailing slash
 				basePathStr = strings.TrimRight(basePathStr, "/") + "/" + subId + "/"
 			}
 			page := a.subService.BuildPageData(subId, hostHeader, traffic, lastOnline, subs, subURL, subJsonURL, basePathStr)
@@ -166,13 +249,15 @@ func (a *SUBController) subs(c *gin.Context) {
 			return
 		}
 
-		// Add headers
+		// Trigger background geo refresh (debounced, non-blocking)
+		a.maybeRefreshGeoFiles()
+
 		header := fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d", traffic.Up, traffic.Down, traffic.Total, traffic.ExpiryTime/1000)
 		profileUrl := a.subProfileUrl
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subCustomHeaders)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.effectiveRoutingRules(), a.subCustomHeaders)
 
 		if a.subEncrypt {
 			c.String(200, base64.StdEncoding.EncodeToString([]byte(result)))
@@ -190,12 +275,14 @@ func (a *SUBController) subJsons(c *gin.Context) {
 	if err != nil || len(jsonSub) == 0 {
 		c.String(400, "Error!")
 	} else {
-		// Add headers
+		// Trigger background geo refresh (debounced, non-blocking)
+		a.maybeRefreshGeoFiles()
+
 		profileUrl := a.subProfileUrl
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules, a.subCustomHeaders)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.effectiveRoutingRules(), a.subCustomHeaders)
 
 		c.String(200, jsonSub)
 	}
@@ -217,7 +304,6 @@ func (a *SUBController) ApplyCommonHeaders(
 	c.Writer.Header().Set("Subscription-Userinfo", header)
 	c.Writer.Header().Set("Profile-Update-Interval", updateInterval)
 
-	//Basics
 	if profileTitle != "" {
 		c.Writer.Header().Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(profileTitle)))
 	}
@@ -231,7 +317,7 @@ func (a *SUBController) ApplyCommonHeaders(
 		c.Writer.Header().Set("Announce", "base64:"+base64.StdEncoding.EncodeToString([]byte(profileAnnounce)))
 	}
 
-	//Advanced (Happ)
+	// Advanced (Happ)
 	c.Writer.Header().Set("Routing-Enable", strconv.FormatBool(profileEnableRouting))
 	if profileRoutingRules != "" {
 		c.Writer.Header().Set("Routing", profileRoutingRules)

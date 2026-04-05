@@ -15,9 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// HappRoutingConfig represents the JSON payload inside a happ://routing/... URL.
-// Only fields relevant to geo-file processing are parsed; all others are preserved
-// via RawFields so the round-tripped JSON stays intact.
+// HappRoutingConfig holds the geo-relevant fields from a happ://routing/... JSON payload.
 type HappRoutingConfig struct {
 	Geoipurl    string   `json:"Geoipurl"`
 	Geositeurl  string   `json:"Geositeurl"`
@@ -39,11 +37,19 @@ type SubGeoFileInfo struct {
 	ProcessedAt       string `json:"processedAt"`
 }
 
-// GeoFilterService downloads, filters, and saves geo dat files for happ routing.
+// GeoEtags stores the ETags received from upstream geo-file sources so that
+// subsequent requests can use If-None-Match for conditional downloads.
+type GeoEtags struct {
+	GeoipEtag   string `json:"geoipEtag"`
+	GeositeEtag string `json:"geositeEtag"`
+}
+
+// GeoFilterService downloads, filters, and serves geo dat files for happ routing.
 type GeoFilterService struct{}
 
-// ParseHappRoutingURL extracts and decodes the base64 JSON payload from a
+// ParseHappRoutingURL decodes the base64 JSON payload from a
 // happ://routing/<action>/<base64> URL.
+// Returns the typed config, a raw field map for round-trip preservation, and any error.
 func (s *GeoFilterService) ParseHappRoutingURL(raw string) (*HappRoutingConfig, map[string]json.RawMessage, error) {
 	raw = strings.TrimSpace(raw)
 	if !strings.HasPrefix(raw, "happ://routing/") {
@@ -57,13 +63,13 @@ func (s *GeoFilterService) ParseHappRoutingURL(raw string) (*HappRoutingConfig, 
 
 	var data []byte
 	var err error
-	for _, enc := range []func(string) ([]byte, error){
+	for _, dec := range []func(string) ([]byte, error){
 		base64.StdEncoding.DecodeString,
 		base64.URLEncoding.DecodeString,
 		base64.RawStdEncoding.DecodeString,
 		base64.RawURLEncoding.DecodeString,
 	} {
-		data, err = enc(b64)
+		data, err = dec(b64)
 		if err == nil {
 			break
 		}
@@ -77,152 +83,247 @@ func (s *GeoFilterService) ParseHappRoutingURL(raw string) (*HappRoutingConfig, 
 		return nil, nil, fmt.Errorf("JSON parse: %w", err)
 	}
 
-	// Preserve all original fields so the round-trip doesn't lose anything
-	var all map[string]json.RawMessage
-	_ = json.Unmarshal(data, &all)
+	var allFields map[string]json.RawMessage
+	_ = json.Unmarshal(data, &allFields)
 
-	return cfg, all, nil
+	return cfg, allFields, nil
 }
 
-// extractCategories returns an uppercase set of category names from entries like
+// extractCategories returns an uppercase set of category codes from entries like
 // "geoip:ru" or "geosite:TELEGRAM". Entries without the expected prefix are skipped.
 func extractCategories(entries []string, prefix string) map[string]bool {
 	out := make(map[string]bool)
 	p := prefix + ":"
 	for _, e := range entries {
-		lower := strings.ToLower(e)
-		if strings.HasPrefix(lower, p) {
+		if strings.HasPrefix(strings.ToLower(e), p) {
 			out[strings.ToUpper(e[len(p):])] = true
 		}
 	}
 	return out
 }
 
-func downloadBytes(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, err
+// collectAllCats merges categories from all geo rule lists for a given prefix.
+func collectAllCats(cfg *HappRoutingConfig, prefix string) map[string]bool {
+	var all []string
+	if prefix == "geoip" {
+		all = append(all, cfg.DirectIp...)
+		all = append(all, cfg.ProxyIp...)
+		all = append(all, cfg.BlockIp...)
+	} else {
+		all = append(all, cfg.DirectSites...)
+		all = append(all, cfg.ProxySites...)
+		all = append(all, cfg.BlockSites...)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
-	}
-	return io.ReadAll(resp.Body)
+	return extractCategories(all, prefix)
 }
 
-func filterGeoIP(url string, cats map[string]bool) ([]byte, int, error) {
-	raw, err := downloadBytes(url)
+// downloadWithEtag performs a GET request with an optional If-None-Match header.
+// Returns (body, etag, changed). body is nil and changed is false on HTTP 304.
+func downloadWithEtag(url, knownEtag string) ([]byte, string, bool, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("download geoip: %w", err)
+		return nil, "", false, err
 	}
+	if knownEtag != "" {
+		req.Header.Set("If-None-Match", knownEtag)
+	}
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer resp.Body.Close()
+
+	etag := resp.Header.Get("ETag")
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, etag, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", false, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+	body, err := io.ReadAll(resp.Body)
+	return body, etag, true, err
+}
+
+// filterGeoIPBytes parses a GeoIPList protobuf and keeps only entries whose
+// CountryCode is in cats.
+func filterGeoIPBytes(data []byte, cats map[string]bool) ([]byte, int, error) {
 	list := &xrayRouter.GeoIPList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if err := proto.Unmarshal(data, list); err != nil {
 		return nil, 0, fmt.Errorf("parse geoip: %w", err)
 	}
 	filtered := &xrayRouter.GeoIPList{}
-	for _, entry := range list.Entry {
-		if cats[strings.ToUpper(entry.CountryCode)] {
-			filtered.Entry = append(filtered.Entry, entry)
+	for _, e := range list.Entry {
+		if cats[strings.ToUpper(e.CountryCode)] {
+			filtered.Entry = append(filtered.Entry, e)
 		}
 	}
 	out, err := proto.Marshal(filtered)
-	if err != nil {
-		return nil, 0, fmt.Errorf("marshal geoip: %w", err)
-	}
-	return out, len(filtered.Entry), nil
+	return out, len(filtered.Entry), err
 }
 
-func filterGeoSite(url string, cats map[string]bool) ([]byte, int, error) {
-	raw, err := downloadBytes(url)
-	if err != nil {
-		return nil, 0, fmt.Errorf("download geosite: %w", err)
-	}
+// filterGeoSiteBytes parses a GeoSiteList protobuf and keeps only entries whose
+// CountryCode is in cats.
+func filterGeoSiteBytes(data []byte, cats map[string]bool) ([]byte, int, error) {
 	list := &xrayRouter.GeoSiteList{}
-	if err := proto.Unmarshal(raw, list); err != nil {
+	if err := proto.Unmarshal(data, list); err != nil {
 		return nil, 0, fmt.Errorf("parse geosite: %w", err)
 	}
 	filtered := &xrayRouter.GeoSiteList{}
-	for _, entry := range list.Entry {
-		if cats[strings.ToUpper(entry.CountryCode)] {
-			filtered.Entry = append(filtered.Entry, entry)
+	for _, e := range list.Entry {
+		if cats[strings.ToUpper(e.CountryCode)] {
+			filtered.Entry = append(filtered.Entry, e)
 		}
 	}
 	out, err := proto.Marshal(filtered)
-	if err != nil {
-		return nil, 0, fmt.Errorf("marshal geosite: %w", err)
-	}
-	return out, len(filtered.Entry), nil
+	return out, len(filtered.Entry), err
 }
 
-// ProcessGeoFiles downloads and filters the geo dat files referenced by routingURL,
-// saves them to the bin folder, updates the Geoipurl/Geositeurl in the JSON to point
-// to subBaseURL/geodata/{file}, and returns the updated routing URL + file metadata.
-// If subBaseURL is empty the URLs in the config are left unchanged.
-func (s *GeoFilterService) ProcessGeoFiles(routingURL, subBaseURL string) (string, *SubGeoFileInfo, error) {
-	cfg, allFields, err := s.ParseHappRoutingURL(routingURL)
+// ProcessGeoFiles unconditionally downloads both geo files, filters them to the
+// categories referenced by routingURL, and saves them to the bin folder.
+// The original routingURL is never modified.
+// Returns file metadata and the ETags returned by the upstream servers.
+func (s *GeoFilterService) ProcessGeoFiles(routingURL string) (*SubGeoFileInfo, GeoEtags, error) {
+	cfg, _, err := s.ParseHappRoutingURL(routingURL)
 	if err != nil {
-		return routingURL, nil, err
-	}
-
-	// Collect all categories needed from every rule list
-	geoipCats := extractCategories(cfg.DirectIp, "geoip")
-	for k := range extractCategories(cfg.ProxyIp, "geoip") {
-		geoipCats[k] = true
-	}
-	for k := range extractCategories(cfg.BlockIp, "geoip") {
-		geoipCats[k] = true
-	}
-
-	geositeCats := extractCategories(cfg.DirectSites, "geosite")
-	for k := range extractCategories(cfg.ProxySites, "geosite") {
-		geositeCats[k] = true
-	}
-	for k := range extractCategories(cfg.BlockSites, "geosite") {
-		geositeCats[k] = true
+		return nil, GeoEtags{}, err
 	}
 
 	binPath := config.GetBinFolderPath()
 	info := &SubGeoFileInfo{ProcessedAt: time.Now().UTC().Format(time.RFC3339)}
+	var etags GeoEtags
 
-	// Filter geoip
-	geoipData, geoipCount, err := filterGeoIP(cfg.Geoipurl, geoipCats)
+	// geoip
+	geoipData, geoipEtag, _, err := downloadWithEtag(cfg.Geoipurl, "")
 	if err != nil {
-		return routingURL, nil, err
+		return nil, GeoEtags{}, err
 	}
-	if err := os.WriteFile(binPath+"/sub_geoip.dat", geoipData, 0o644); err != nil {
-		return routingURL, nil, fmt.Errorf("write sub_geoip.dat: %w", err)
+	filteredGeoip, geoipCount, err := filterGeoIPBytes(geoipData, collectAllCats(cfg, "geoip"))
+	if err != nil {
+		return nil, GeoEtags{}, err
 	}
-	info.GeoipSize = int64(len(geoipData))
+	if err := os.WriteFile(binPath+"/sub_geoip.dat", filteredGeoip, 0o644); err != nil {
+		return nil, GeoEtags{}, fmt.Errorf("write sub_geoip.dat: %w", err)
+	}
+	info.GeoipSize = int64(len(filteredGeoip))
 	info.GeoipCategories = geoipCount
+	etags.GeoipEtag = geoipEtag
 
-	// Filter geosite
-	geositeData, geositeCount, err := filterGeoSite(cfg.Geositeurl, geositeCats)
+	// geosite
+	geositeData, geositeEtag, _, err := downloadWithEtag(cfg.Geositeurl, "")
 	if err != nil {
-		return routingURL, nil, err
+		return nil, GeoEtags{}, err
 	}
-	if err := os.WriteFile(binPath+"/sub_geosite.dat", geositeData, 0o644); err != nil {
-		return routingURL, nil, fmt.Errorf("write sub_geosite.dat: %w", err)
+	filteredGeosite, geositeCount, err := filterGeoSiteBytes(geositeData, collectAllCats(cfg, "geosite"))
+	if err != nil {
+		return nil, GeoEtags{}, err
 	}
-	info.GeositeSize = int64(len(geositeData))
+	if err := os.WriteFile(binPath+"/sub_geosite.dat", filteredGeosite, 0o644); err != nil {
+		return nil, GeoEtags{}, fmt.Errorf("write sub_geosite.dat: %w", err)
+	}
+	info.GeositeSize = int64(len(filteredGeosite))
 	info.GeositeCategories = geositeCount
+	etags.GeositeEtag = geositeEtag
 
-	// Rebuild the happ URL with updated geo file URLs
-	if subBaseURL != "" && allFields != nil {
-		newGeoip, _ := json.Marshal(subBaseURL + "/geodata/geoip.dat")
-		newGeosite, _ := json.Marshal(subBaseURL + "/geodata/geosite.dat")
-		newTs, _ := json.Marshal(fmt.Sprintf("%d", time.Now().Unix()))
-		allFields["Geoipurl"] = json.RawMessage(newGeoip)
-		allFields["Geositeurl"] = json.RawMessage(newGeosite)
-		allFields["LastUpdated"] = json.RawMessage(newTs)
+	return info, etags, nil
+}
 
-		jsonData, err := json.Marshal(allFields)
-		if err == nil {
-			b64 := base64.StdEncoding.EncodeToString(jsonData)
-			idx := strings.LastIndex(routingURL, "/")
-			routingURL = routingURL[:idx+1] + b64
-		}
+// RefreshIfStale performs conditional downloads using knownEtags. If either
+// upstream file changed it re-filters and saves. Returns whether any file was
+// refreshed, the new metadata (nil if unchanged), and updated ETags.
+func (s *GeoFilterService) RefreshIfStale(routingURL string, knownEtags GeoEtags) (bool, *SubGeoFileInfo, GeoEtags, error) {
+	cfg, _, err := s.ParseHappRoutingURL(routingURL)
+	if err != nil {
+		return false, nil, knownEtags, err
 	}
 
-	return routingURL, info, nil
+	binPath := config.GetBinFolderPath()
+	newEtags := knownEtags
+	refreshed := false
+	info := &SubGeoFileInfo{ProcessedAt: time.Now().UTC().Format(time.RFC3339)}
+
+	// Conditional download for geoip
+	geoipData, geoipEtag, geoipChanged, err := downloadWithEtag(cfg.Geoipurl, knownEtags.GeoipEtag)
+	if err != nil {
+		return false, nil, knownEtags, err
+	}
+	if geoipEtag != "" {
+		newEtags.GeoipEtag = geoipEtag
+	}
+	if geoipChanged {
+		filtered, count, err := filterGeoIPBytes(geoipData, collectAllCats(cfg, "geoip"))
+		if err != nil {
+			return false, nil, knownEtags, err
+		}
+		if err := os.WriteFile(binPath+"/sub_geoip.dat", filtered, 0o644); err != nil {
+			return false, nil, knownEtags, fmt.Errorf("write sub_geoip.dat: %w", err)
+		}
+		info.GeoipSize = int64(len(filtered))
+		info.GeoipCategories = count
+		refreshed = true
+	} else if fi, err := os.Stat(binPath + "/sub_geoip.dat"); err == nil {
+		info.GeoipSize = fi.Size()
+	}
+
+	// Conditional download for geosite
+	geositeData, geositeEtag, geositeChanged, err := downloadWithEtag(cfg.Geositeurl, knownEtags.GeositeEtag)
+	if err != nil {
+		return false, nil, knownEtags, err
+	}
+	if geositeEtag != "" {
+		newEtags.GeositeEtag = geositeEtag
+	}
+	if geositeChanged {
+		filtered, count, err := filterGeoSiteBytes(geositeData, collectAllCats(cfg, "geosite"))
+		if err != nil {
+			return false, nil, knownEtags, err
+		}
+		if err := os.WriteFile(binPath+"/sub_geosite.dat", filtered, 0o644); err != nil {
+			return false, nil, knownEtags, fmt.Errorf("write sub_geosite.dat: %w", err)
+		}
+		info.GeositeSize = int64(len(filtered))
+		info.GeositeCategories = count
+		refreshed = true
+	} else if fi, err := os.Stat(binPath + "/sub_geosite.dat"); err == nil {
+		info.GeositeSize = fi.Size()
+	}
+
+	if !refreshed {
+		return false, nil, newEtags, nil
+	}
+	return true, info, newEtags, nil
+}
+
+// BuildModifiedRoutingURL returns a copy of rawURL with Geoipurl and Geositeurl
+// replaced by the sub server's local /geodata/ paths. Returns rawURL unchanged
+// if subBaseURL is empty or the local dat files do not exist yet.
+func (s *GeoFilterService) BuildModifiedRoutingURL(rawURL, subBaseURL string) (string, error) {
+	if subBaseURL == "" || rawURL == "" {
+		return rawURL, nil
+	}
+	binPath := config.GetBinFolderPath()
+	if _, err := os.Stat(binPath + "/sub_geoip.dat"); err != nil {
+		return rawURL, nil
+	}
+	if _, err := os.Stat(binPath + "/sub_geosite.dat"); err != nil {
+		return rawURL, nil
+	}
+
+	_, allFields, err := s.ParseHappRoutingURL(rawURL)
+	if err != nil || allFields == nil {
+		return rawURL, nil
+	}
+
+	newGeoip, _ := json.Marshal(subBaseURL + "/geodata/geoip.dat")
+	newGeosite, _ := json.Marshal(subBaseURL + "/geodata/geosite.dat")
+	allFields["Geoipurl"] = json.RawMessage(newGeoip)
+	allFields["Geositeurl"] = json.RawMessage(newGeosite)
+
+	jsonData, err := json.Marshal(allFields)
+	if err != nil {
+		return rawURL, nil
+	}
+	b64 := base64.StdEncoding.EncodeToString(jsonData)
+	idx := strings.LastIndex(rawURL, "/")
+	return rawURL[:idx+1] + b64, nil
 }

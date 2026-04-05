@@ -69,7 +69,8 @@ func (a *SettingController) getDefaultSettings(c *gin.Context) {
 	jsonObj(c, result, nil)
 }
 
-// updateSetting updates all settings with the provided data.
+// updateSetting saves all settings. If subRoutingRules changed and is non-empty,
+// geo files are re-processed asynchronously in the background.
 func (a *SettingController) updateSetting(c *gin.Context) {
 	allSetting := &entity.AllSetting{}
 	err := c.ShouldBind(allSetting)
@@ -77,8 +78,63 @@ func (a *SettingController) updateSetting(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 		return
 	}
+
+	oldRules, _ := a.settingService.GetSubRoutingRules()
+
 	err = a.settingService.UpdateAllSetting(allSetting)
-	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+		return
+	}
+
+	newRules := strings.TrimSpace(allSetting.SubRoutingRules)
+	if newRules != "" && newRules != strings.TrimSpace(oldRules) {
+		go a.runGeoProcessing(newRules)
+	}
+
+	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), nil)
+}
+
+// runGeoProcessing is called in a goroutine when routing rules change.
+// It performs a full (unconditional) download and filter, then saves results to DB.
+func (a *SettingController) runGeoProcessing(routingRules string) {
+	geoSvc := service.GeoFilterService{}
+	info, etags, err := geoSvc.ProcessGeoFiles(routingRules)
+	if err != nil {
+		return
+	}
+	infoJSON, _ := json.Marshal(info)
+	_ = a.settingService.SetSubRoutingGeoInfo(string(infoJSON))
+	_ = a.settingService.SetSubGeoEtags(etags)
+}
+
+// processRoutingGeo triggers an immediate (synchronous) geo file processing and
+// returns the file metadata. The original subRoutingRules value is never modified.
+func (a *SettingController) processRoutingGeo(c *gin.Context) {
+	routingRules, err := a.settingService.GetSubRoutingRules()
+	if err != nil || strings.TrimSpace(routingRules) == "" {
+		jsonMsg(c, "processRoutingGeo", errors.New("subRoutingRules is empty"))
+		return
+	}
+
+	geoSvc := service.GeoFilterService{}
+	info, etags, err := geoSvc.ProcessGeoFiles(routingRules)
+	if err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+
+	infoJSON, _ := json.Marshal(info)
+	if err := a.settingService.SetSubRoutingGeoInfo(string(infoJSON)); err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+	if err := a.settingService.SetSubGeoEtags(etags); err != nil {
+		jsonMsg(c, "processRoutingGeo", err)
+		return
+	}
+
+	jsonObj(c, info, nil)
 }
 
 // updateUser updates the current user's username and password.
@@ -111,44 +167,6 @@ func (a *SettingController) updateUser(c *gin.Context) {
 func (a *SettingController) restartPanel(c *gin.Context) {
 	err := a.panelService.RestartPanel(time.Second * 3)
 	jsonMsg(c, I18nWeb(c, "pages.settings.restartPanelSuccess"), err)
-}
-
-// processRoutingGeo downloads, filters, and saves geo dat files based on the
-// current subRoutingRules happ URL. The Geoipurl/Geositeurl inside the URL are
-// updated to point to the sub server's /geodata/ endpoints, and the result is
-// written back to subRoutingRules. File metadata is stored in subRoutingGeoInfo.
-func (a *SettingController) processRoutingGeo(c *gin.Context) {
-	routingRules, err := a.settingService.GetSubRoutingRules()
-	if err != nil || strings.TrimSpace(routingRules) == "" {
-		jsonMsg(c, "processRoutingGeo", errors.New("subRoutingRules is empty"))
-		return
-	}
-
-	subBaseURL, err := a.settingService.GetSubBaseURL()
-	if err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-
-	geoSvc := service.GeoFilterService{}
-	newRules, info, err := geoSvc.ProcessGeoFiles(routingRules, subBaseURL)
-	if err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-
-	if err := a.settingService.SaveSubRoutingRules(newRules); err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-
-	infoJSON, _ := json.Marshal(info)
-	if err := a.settingService.SetSubRoutingGeoInfo(string(infoJSON)); err != nil {
-		jsonMsg(c, "processRoutingGeo", err)
-		return
-	}
-
-	jsonObj(c, info, nil)
 }
 
 // getDefaultXrayConfig retrieves the default Xray configuration.

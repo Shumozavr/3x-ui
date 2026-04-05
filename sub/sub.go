@@ -5,6 +5,7 @@ package sub
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
@@ -260,28 +261,36 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	g := engine.Group("/")
 
-	// Serve filtered geo dat files produced by the processRoutingGeo endpoint.
-	engine.GET("/geodata/geoip.dat", func(c *gin.Context) {
-		p := config.GetBinFolderPath() + "/sub_geoip.dat"
-		if _, err := os.Stat(p); err != nil {
-			c.Status(http.StatusNotFound)
-			return
+	// Serve filtered geo dat files with ETag support (mtime-based).
+	serveGeoDat := func(filename string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			p := config.GetBinFolderPath() + "/" + filename
+			fi, err := os.Stat(p)
+			if err != nil {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			etag := fmt.Sprintf(`"%d"`, fi.ModTime().Unix())
+			if c.GetHeader("If-None-Match") == etag {
+				c.Status(http.StatusNotModified)
+				return
+			}
+			c.Header("ETag", etag)
+			c.File(p)
 		}
-		c.File(p)
-	})
-	engine.GET("/geodata/geosite.dat", func(c *gin.Context) {
-		p := config.GetBinFolderPath() + "/sub_geosite.dat"
-		if _, err := os.Stat(p); err != nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		c.File(p)
-	})
+	}
+	engine.GET("/geodata/geoip.dat", serveGeoDat("sub_geoip.dat"))
+	engine.GET("/geodata/geosite.dat", serveGeoDat("sub_geosite.dat"))
+
+	SubBaseURL, err := s.settingService.GetSubBaseURL()
+	if err != nil {
+		SubBaseURL = ""
+	}
 
 	s.sub = NewSUBController(
 		g, LinksPath, JsonPath, subJsonEnable, Encrypt, ShowInfo, RemarkModel, SubUpdates,
 		SubJsonFragment, SubJsonNoises, SubJsonMux, SubJsonRules, SubTitle, SubSupportUrl,
-		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules, SubCustomHeaders)
+		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules, SubCustomHeaders, SubBaseURL)
 
 	return engine, nil
 }

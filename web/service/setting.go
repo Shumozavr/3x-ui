@@ -78,6 +78,7 @@ var defaultValueMap = map[string]string{
 	"subJsonRules":                "",
 	"subCustomHeaders":            "",
 	"subRoutingGeoInfo":           "",
+	"subGeoEtags":                 "",
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"externalTrafficInformEnable": "false",
@@ -586,8 +587,24 @@ func (s *SettingService) SetSubRoutingGeoInfo(info string) error {
 	return s.setString("subRoutingGeoInfo", info)
 }
 
-func (s *SettingService) SaveSubRoutingRules(rules string) error {
-	return s.setString("subRoutingRules", rules)
+func (s *SettingService) GetSubGeoEtags() (GeoEtags, error) {
+	raw, err := s.getString("subGeoEtags")
+	if err != nil || raw == "" {
+		return GeoEtags{}, err
+	}
+	var etags GeoEtags
+	if err := json.Unmarshal([]byte(raw), &etags); err != nil {
+		return GeoEtags{}, nil // treat corrupt data as empty
+	}
+	return etags, nil
+}
+
+func (s *SettingService) SetSubGeoEtags(etags GeoEtags) error {
+	data, err := json.Marshal(etags)
+	if err != nil {
+		return err
+	}
+	return s.setString("subGeoEtags", string(data))
 }
 
 // GetSubBaseURL derives the subscription server's base URL (scheme://host:port)
