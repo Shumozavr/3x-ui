@@ -384,7 +384,6 @@
 "subEnableRoutingDesc" = "Global setting to enable routing in the VPN client. (Only for Happ)"
 "subRoutingRules" = "Routing rules"
 "subRoutingRulesDesc" = "Global routing rules for the VPN client. (Only for Happ)"
-"subRoutingGeoProcess" = "Process Geo Files"
 "subRoutingGeoInfoLabel" = "Last processed"
 "subRoutingGeoCategories" = "cats"
 "subCustomHeadersDivider" = "Custom Headers"
