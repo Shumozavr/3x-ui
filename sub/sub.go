@@ -5,7 +5,6 @@ package sub
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
@@ -265,12 +264,11 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	serveGeoDat := func(filename string) gin.HandlerFunc {
 		return func(c *gin.Context) {
 			p := config.GetBinFolderPath() + "/" + filename
-			fi, err := os.Stat(p)
+			etag, _, err := service.GeoFileEtag(p)
 			if err != nil {
 				c.Status(http.StatusNotFound)
 				return
 			}
-			etag := fmt.Sprintf(`"%d"`, fi.ModTime().Unix())
 			if c.GetHeader("If-None-Match") == etag {
 				c.Status(http.StatusNotModified)
 				return

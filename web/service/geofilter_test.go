@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -493,30 +494,39 @@ func TestBuildModifiedRoutingURL_SubstitutesURLs(t *testing.T) {
 	if geoipURL != subBase+"/geodata/geoip.dat" {
 		t.Errorf("Geoipurl = %q", geoipURL)
 	}
+	// LastUpdated should be a non-empty Unix timestamp string
+	var lastUpdated string
+	json.Unmarshal(result["LastUpdated"], &lastUpdated)
+	if lastUpdated == "" {
+		t.Error("LastUpdated should be set")
+	}
+	if _, err := strconv.ParseInt(lastUpdated, 10, 64); err != nil {
+		t.Errorf("LastUpdated %q is not a Unix timestamp: %v", lastUpdated, err)
+	}
 	// Extra fields preserved
 	if _, ok := result["Name"]; !ok {
 		t.Error("extra field 'Name' should be preserved")
 	}
 }
 
-func TestBuildModifiedRoutingURL_NoLocalFiles_ReturnsOriginal(t *testing.T) {
+func TestBuildModifiedRoutingURL_NoLocalFiles_ReturnsError(t *testing.T) {
 	t.Setenv("XUI_BIN_FOLDER", t.TempDir()) // empty dir, no dat files
 	payload := map[string]any{"Geoipurl": "https://upstream.com/geoip.dat", "Geositeurl": "https://upstream.com/geosite.dat"}
 	rawURL := happURL(t, payload)
 
 	svc := GeoFilterService{}
-	modified, _ := svc.BuildModifiedRoutingURL(rawURL, "http://sub.example.com:2096")
-	if modified != rawURL {
-		t.Error("should return original URL when local files are absent")
+	_, err := svc.BuildModifiedRoutingURL(rawURL, "http://sub.example.com:2096")
+	if err == nil {
+		t.Error("expected error when local files are absent")
 	}
 }
 
-func TestBuildModifiedRoutingURL_EmptySubBaseURL_ReturnsOriginal(t *testing.T) {
+func TestBuildModifiedRoutingURL_EmptySubBaseURL_ReturnsError(t *testing.T) {
 	payload := map[string]any{"Geoipurl": "https://upstream.com/geoip.dat", "Geositeurl": "https://upstream.com/geosite.dat"}
 	rawURL := happURL(t, payload)
 	svc := GeoFilterService{}
-	modified, _ := svc.BuildModifiedRoutingURL(rawURL, "")
-	if modified != rawURL {
-		t.Error("should return original URL when subBaseURL is empty")
+	_, err := svc.BuildModifiedRoutingURL(rawURL, "")
+	if err == nil {
+		t.Error("expected error when subBaseURL is empty")
 	}
 }

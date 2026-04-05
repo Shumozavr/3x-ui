@@ -47,6 +47,16 @@ type GeoEtags struct {
 // GeoFilterService downloads, filters, and serves geo dat files for happ routing.
 type GeoFilterService struct{}
 
+// GeoFileEtag returns the mtime-based ETag (RFC 7232 quoted string) and modification
+// time for the file at path. Returns an error if the file cannot be stat'd.
+func GeoFileEtag(path string) (etag string, mtime time.Time, err error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return fmt.Sprintf(`"%d"`, fi.ModTime().Unix()), fi.ModTime(), nil
+}
+
 // ParseHappRoutingURL decodes the base64 JSON payload from a
 // happ://routing/<action>/<base64> URL.
 // Returns the typed config, a raw field map for round-trip preservation, and any error.
@@ -295,33 +305,44 @@ func (s *GeoFilterService) RefreshIfStale(routingURL string, knownEtags GeoEtags
 }
 
 // BuildModifiedRoutingURL returns a copy of rawURL with Geoipurl and Geositeurl
-// replaced by the sub server's local /geodata/ paths. Returns rawURL unchanged
-// if subBaseURL is empty or the local dat files do not exist yet.
+// replaced by the sub server's local /geodata/ paths, and LastUpdated set to the
+// RFC3339 mtime of the newer of the two local geo files. Returns an error if
+// subBaseURL is empty, the local dat files do not exist yet, or parsing fails.
 func (s *GeoFilterService) BuildModifiedRoutingURL(rawURL, subBaseURL string) (string, error) {
 	if subBaseURL == "" || rawURL == "" {
-		return rawURL, nil
+		return "", fmt.Errorf("subBaseURL or rawURL is empty")
 	}
 	binPath := config.GetBinFolderPath()
-	if _, err := os.Stat(binPath + "/sub_geoip.dat"); err != nil {
-		return rawURL, nil
+
+	_, geoipMtime, err := GeoFileEtag(binPath + "/sub_geoip.dat")
+	if err != nil {
+		return "", fmt.Errorf("sub_geoip.dat not ready: %w", err)
 	}
-	if _, err := os.Stat(binPath + "/sub_geosite.dat"); err != nil {
-		return rawURL, nil
+	_, geositeMtime, err := GeoFileEtag(binPath + "/sub_geosite.dat")
+	if err != nil {
+		return "", fmt.Errorf("sub_geosite.dat not ready: %w", err)
+	}
+
+	lastUpdated := geoipMtime
+	if geositeMtime.After(lastUpdated) {
+		lastUpdated = geositeMtime
 	}
 
 	_, allFields, err := s.ParseHappRoutingURL(rawURL)
 	if err != nil || allFields == nil {
-		return rawURL, nil
+		return "", fmt.Errorf("parse routing URL: %w", err)
 	}
 
 	newGeoip, _ := json.Marshal(subBaseURL + "/geodata/geoip.dat")
 	newGeosite, _ := json.Marshal(subBaseURL + "/geodata/geosite.dat")
+	newLastUpdated, _ := json.Marshal(fmt.Sprintf("%d", lastUpdated.Unix()))
 	allFields["Geoipurl"] = json.RawMessage(newGeoip)
 	allFields["Geositeurl"] = json.RawMessage(newGeosite)
+	allFields["LastUpdated"] = json.RawMessage(newLastUpdated)
 
 	jsonData, err := json.Marshal(allFields)
 	if err != nil {
-		return rawURL, nil
+		return "", fmt.Errorf("marshal routing JSON: %w", err)
 	}
 	b64 := base64.StdEncoding.EncodeToString(jsonData)
 	idx := strings.LastIndex(rawURL, "/")
