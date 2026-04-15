@@ -2219,7 +2219,7 @@ func (t *Tgbot) SendAnswer(chatId int64, msg string, isAdmin bool) {
 		),
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton(t.I18nBot("pages.settings.subSettings")).WithCallbackData(t.encodeQuery("admin_client_sub_links")),
-			tu.InlineKeyboardButton(t.I18nBot("subscription.individualLinks")).WithCallbackData(t.encodeQuery("admin_client_individual_links")),
+			//tu.InlineKeyboardButton(t.I18nBot("subscription.individualLinks")).WithCallbackData(t.encodeQuery("admin_client_individual_links")),
 			tu.InlineKeyboardButton(t.I18nBot("qrCode")).WithCallbackData(t.encodeQuery("admin_client_qr_links")),
 		),
 		// TODOOOOOOOOOOOOOO: Add restart button here.
@@ -2231,7 +2231,7 @@ func (t *Tgbot) SendAnswer(chatId int64, msg string, isAdmin bool) {
 		),
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton(t.I18nBot("pages.settings.subSettings")).WithCallbackData(t.encodeQuery("client_sub_links")),
-			tu.InlineKeyboardButton(t.I18nBot("subscription.individualLinks")).WithCallbackData(t.encodeQuery("client_individual_links")),
+			//tu.InlineKeyboardButton(t.I18nBot("subscription.individualLinks")).WithCallbackData(t.encodeQuery("client_individual_links")),
 		),
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton(t.I18nBot("qrCode")).WithCallbackData(t.encodeQuery("client_qr_links")),
@@ -2427,11 +2427,11 @@ func (t *Tgbot) sendClientSubLinks(chatId int64, email string) {
 		msg += "\r\n\r\nJSON URL:\r\n<code>" + subJsonURL + "</code>"
 	}
 	inlineKeyboard := tu.InlineKeyboard(
+		//tu.InlineKeyboardRow(
+		//	tu.InlineKeyboardButton(t.I18nBot("subscription.individualLinks")).WithCallbackData(t.encodeQuery("client_individual_links "+email)),
+		//),
 		tu.InlineKeyboardRow(
-			tu.InlineKeyboardButton(t.I18nBot("subscription.individualLinks")).WithCallbackData(t.encodeQuery("client_individual_links "+email)),
-		),
-		tu.InlineKeyboardRow(
-			tu.InlineKeyboardButton(t.I18nBot("qrCode")).WithCallbackData(t.encodeQuery("client_qr_links "+email)),
+			tu.InlineKeyboardButton(t.I18nBot("qrCode")).WithCallbackData(t.encodeQuery("client_qr_links " + email)),
 		),
 	)
 	t.SendMsgToTgbot(chatId, msg, inlineKeyboard)
@@ -2439,6 +2439,8 @@ func (t *Tgbot) sendClientSubLinks(chatId int64, email string) {
 
 // sendClientIndividualLinks fetches the subscription content (individual links) and sends it to the user
 func (t *Tgbot) sendClientIndividualLinks(chatId int64, email string) {
+	// do not send individual links
+	return
 	// Build the HTML sub page URL; we'll call it with header Accept to get raw content
 	subURL, _, err := t.buildSubscriptionURLs(email)
 	if err != nil {
@@ -2592,24 +2594,25 @@ func (t *Tgbot) sendClientQRLinks(chatId int64, email string) {
 					cleaned = append(cleaned, l)
 				}
 			}
-			if len(cleaned) > 0 {
-				max := min(len(cleaned), 5)
-				for i := range max {
-					if png, err := createQR(cleaned[i], 320); err == nil {
-						// Use the email as filename for individual link QR
-						filename := email + ".png"
-						document := tu.Document(
-							tu.ID(chatId),
-							tu.FileFromBytes(png, filename),
-						)
-						_, _ = bot.SendDocument(context.Background(), document)
-						// Reduced delay for better performance
-						if i < max-1 { // Only delay between documents, not after the last one
-							time.Sleep(50 * time.Millisecond)
-						}
-					}
-				}
-			}
+			// do not show individual links
+			//if len(cleaned) > 0 {
+			//	max := min(len(cleaned), 5)
+			//	for i := range max {
+			//		if png, err := createQR(cleaned[i], 320); err == nil {
+			//			// Use the email as filename for individual link QR
+			//			filename := email + ".png"
+			//			document := tu.Document(
+			//				tu.ID(chatId),
+			//				tu.FileFromBytes(png, filename),
+			//			)
+			//			_, _ = bot.SendDocument(context.Background(), document)
+			//			// Reduced delay for better performance
+			//			if i < max-1 { // Only delay between documents, not after the last one
+			//				time.Sleep(50 * time.Millisecond)
+			//			}
+			//		}
+			//	}
+			//}
 		}
 	}
 }
