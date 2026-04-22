@@ -1162,9 +1162,20 @@
         }
       },
       openCloneInbound(dbInbound) {
+        const state = { remark: dbInbound.remark + ' - Cloned', cloneClients: false };
         this.$confirm({
           title: '{{ i18n "pages.inbounds.cloneInbound"}} \"' + dbInbound.remark + '\"',
-          content: '{{ i18n "pages.inbounds.cloneInboundContent"}}',
+          content: (h) => h('div', [
+            h('p', { style: 'margin-bottom:8px' }, '{{ i18n "pages.inbounds.cloneInboundContent"}}'),
+            h('a-input', {
+              props: { value: state.remark, placeholder: '{{ i18n "pages.inbounds.cloneRemarkPlaceholder"}}' },
+              style: 'margin-bottom:8px',
+              on: { change: (e) => { state.remark = e.target.value; } },
+            }),
+            h('a-checkbox', {
+              on: { change: (e) => { state.cloneClients = e.target.checked; } },
+            }, '{{ i18n "pages.inbounds.cloneWithClients"}}'),
+          ]),
           okText: '{{ i18n "pages.inbounds.cloneInboundOk"}}',
           class: themeSwitcher.currentTheme,
           cancelText: '{{ i18n "cancel" }}',
@@ -1172,16 +1183,16 @@
             const baseInbound = dbInbound.toInbound();
             dbInbound.up = 0;
             dbInbound.down = 0;
-            this.cloneInbound(baseInbound, dbInbound);
+            this.cloneInbound(baseInbound, dbInbound, state.remark, state.cloneClients);
           },
         });
       },
-      async cloneInbound(baseInbound, dbInbound) {
+      async cloneInbound(baseInbound, dbInbound, newRemark, cloneClients = false) {
         const data = {
           up: dbInbound.up,
           down: dbInbound.down,
           total: dbInbound.total,
-          remark: dbInbound.remark + " - Cloned",
+          remark: newRemark,
           enable: dbInbound.enable,
           expiryTime: dbInbound.expiryTime,
           trafficReset: dbInbound.trafficReset,
@@ -1190,7 +1201,31 @@
           listen: '',
           port: RandomUtil.randomInteger(10000, 60000),
           protocol: baseInbound.protocol,
-          settings: Inbound.Settings.getSettings(baseInbound.protocol).toString(),
+          settings: (() => {
+            if (!cloneClients) return Inbound.Settings.getSettings(baseInbound.protocol).toString();
+            const s = baseInbound.settings.toJson();
+            if (Array.isArray(s.clients)) {
+              s.clients = s.clients.map(c => {
+                const email = c.email ? newRemark + '/' + c.email : '';
+                const base = { ...c, email };
+                switch (baseInbound.protocol) {
+                  case Protocols.VMESS:
+                  case Protocols.VLESS:
+                    return { ...base, id: RandomUtil.randomUUID() };
+                  case Protocols.TROJAN:
+                    return { ...base, password: RandomUtil.randomSeq(10) };
+                  case Protocols.SHADOWSOCKS:
+                    return { ...base, password: RandomUtil.randomShadowsocksPassword() };
+                  case Protocols.HYSTERIA:
+                  case Protocols.HYSTERIA2:
+                    return { ...base, auth: RandomUtil.randomSeq(10) };
+                  default:
+                    return base;
+                }
+              });
+            }
+            return JSON.stringify(s);
+          })(),
           streamSettings: baseInbound.stream.toString(),
           sniffing: baseInbound.sniffing.toString(),
         };
