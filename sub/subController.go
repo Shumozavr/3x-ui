@@ -43,8 +43,8 @@ type SUBController struct {
 	geoLastChecked time.Time
 	geoRefreshing  bool
 
-	subService     *SubService
-	subJsonService *SubJsonService
+	subService      *SubService
+	subJsonService  *SubJsonService
 	subClashService *SubClashService
 }
 
@@ -313,11 +313,13 @@ func (a *SUBController) subClashs(c *gin.Context) {
 	if err != nil || len(clashSub) == 0 {
 		c.String(400, "Error!")
 	} else {
+		// Trigger background geo refresh (debounced, non-blocking)
+		a.maybeRefreshGeoFiles()
 		profileUrl := a.subProfileUrl
 		if profileUrl == "" {
 			profileUrl = fmt.Sprintf("%s://%s%s", scheme, hostWithPort, c.Request.RequestURI)
 		}
-		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.subRoutingRules)
+		a.ApplyCommonHeaders(c, header, a.updateInterval, a.subTitle, a.subSupportUrl, profileUrl, a.subAnnounce, a.subEnableRouting, a.effectiveRoutingRules(), a.subCustomHeaders)
 		c.Data(200, "application/yaml; charset=utf-8", []byte(clashSub))
 	}
 }
