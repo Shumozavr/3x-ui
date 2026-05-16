@@ -65,6 +65,8 @@ export class AllSetting {
         this.subJsonNoises = "";
         this.subJsonMux = "";
         this.subJsonRules = "";
+        this.subCustomHeaders = "";
+        this.subRoutingGeoInfo = "";
 
         this.timeLocation = "Local";
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -81,6 +82,9 @@ var defaultValueMap = map[string]string{
 	"subJsonNoises":               "",
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
+	"subCustomHeaders":            "",
+	"subRoutingGeoInfo":           "",
+	"subGeoEtags":                 "",
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"nord":                        "",
@@ -635,6 +639,64 @@ func (s *SettingService) GetSubJsonMux() (string, error) {
 
 func (s *SettingService) GetSubJsonRules() (string, error) {
 	return s.getString("subJsonRules")
+}
+
+func (s *SettingService) GetSubCustomHeaders() (string, error) {
+	return s.getString("subCustomHeaders")
+}
+
+func (s *SettingService) GetSubRoutingGeoInfo() (string, error) {
+	return s.getString("subRoutingGeoInfo")
+}
+
+func (s *SettingService) SetSubRoutingGeoInfo(info string) error {
+	return s.setString("subRoutingGeoInfo", info)
+}
+
+func (s *SettingService) GetSubGeoEtags() (GeoEtags, error) {
+	raw, err := s.getString("subGeoEtags")
+	if err != nil || raw == "" {
+		return GeoEtags{}, err
+	}
+	var etags GeoEtags
+	if err := json.Unmarshal([]byte(raw), &etags); err != nil {
+		return GeoEtags{}, nil
+	}
+	return etags, nil
+}
+
+func (s *SettingService) SetSubGeoEtags(etags GeoEtags) error {
+	data, err := json.Marshal(etags)
+	if err != nil {
+		return err
+	}
+	return s.setString("subGeoEtags", string(data))
+}
+
+// GetSubBaseURL derives the subscription server base URL from the configured
+// reverse-proxy URI or, if absent, the domain/port pair.
+func (s *SettingService) GetSubBaseURL() (string, error) {
+	subURI, _ := s.GetSubURI()
+	if subURI != "" {
+		if parsed, err := url.Parse(subURI); err == nil && parsed.Host != "" {
+			return parsed.Scheme + "://" + parsed.Host, nil
+		}
+	}
+	subDomain, _ := s.GetSubDomain()
+	if subDomain == "" {
+		return "", nil
+	}
+	subPort, err := s.GetSubPort()
+	if err != nil {
+		return "", err
+	}
+	subCert, _ := s.GetSubCertFile()
+	subKey, _ := s.GetSubKeyFile()
+	scheme := "http"
+	if subCert != "" && subKey != "" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, subDomain, subPort), nil
 }
 
 func (s *SettingService) GetDatepicker() (string, error) {

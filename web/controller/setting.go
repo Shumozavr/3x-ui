@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/util/crypto"
@@ -80,14 +82,32 @@ func (a *SettingController) updateSetting(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 		return
 	}
+	oldRules, _ := a.settingService.GetSubRoutingRules()
 	oldTwoFactor, twoFactorErr := a.settingService.GetTwoFactorEnable()
 	err = a.settingService.UpdateAllSetting(allSetting)
+	if err == nil {
+		newRules := strings.TrimSpace(allSetting.SubRoutingRules)
+		if newRules != "" && newRules != strings.TrimSpace(oldRules) {
+			go a.runGeoProcessing(newRules)
+		}
+	}
 	if err == nil && twoFactorErr == nil && !oldTwoFactor && allSetting.TwoFactorEnable {
 		if bumpErr := a.userService.BumpLoginEpoch(); bumpErr != nil {
 			err = bumpErr
 		}
 	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
+}
+
+func (a *SettingController) runGeoProcessing(routingRules string) {
+	geoSvc := service.GeoFilterService{}
+	info, etags, err := geoSvc.ProcessGeoFiles(routingRules)
+	if err != nil {
+		return
+	}
+	infoJSON, _ := json.Marshal(info)
+	_ = a.settingService.SetSubRoutingGeoInfo(string(infoJSON))
+	_ = a.settingService.SetSubGeoEtags(etags)
 }
 
 // updateUser updates the current user's username and password.

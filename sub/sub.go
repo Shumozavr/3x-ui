@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v3/config"
 	"github.com/mhsanaei/3x-ui/v3/logger"
 	"github.com/mhsanaei/3x-ui/v3/util/common"
 	"github.com/mhsanaei/3x-ui/v3/web/locale"
@@ -170,6 +171,16 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		SubRoutingRules = ""
 	}
 
+	SubCustomHeaders, err := s.settingService.GetSubCustomHeaders()
+	if err != nil {
+		SubCustomHeaders = ""
+	}
+
+	SubBaseURL, err := s.settingService.GetSubBaseURL()
+	if err != nil {
+		SubBaseURL = ""
+	}
+
 	// set per-request localizer from headers/cookies
 	engine.Use(locale.LocalizerMiddleware())
 
@@ -222,12 +233,31 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		}
 	}
 
+	serveGeoDat := func(filename string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			path := config.GetBinFolderPath() + "/" + filename
+			etag, _, err := service.GeoFileEtag(path)
+			if err != nil {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			if c.GetHeader("If-None-Match") == etag {
+				c.Status(http.StatusNotModified)
+				return
+			}
+			c.Header("ETag", etag)
+			c.File(path)
+		}
+	}
+	engine.GET("/geodata/geoip.dat", serveGeoDat("sub_geoip.dat"))
+	engine.GET("/geodata/geosite.dat", serveGeoDat("sub_geosite.dat"))
+
 	g := engine.Group("/")
 
 	s.sub = NewSUBController(
 		g, LinksPath, JsonPath, ClashPath, subJsonEnable, subClashEnable, Encrypt, ShowInfo, RemarkModel, SubUpdates,
 		SubJsonFragment, SubJsonNoises, SubJsonMux, SubJsonRules, SubTitle, SubSupportUrl,
-		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules)
+		SubProfileUrl, SubAnnounce, SubEnableRouting, SubRoutingRules, SubCustomHeaders, SubBaseURL)
 
 	return engine, nil
 }

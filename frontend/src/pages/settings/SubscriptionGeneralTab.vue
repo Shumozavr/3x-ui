@@ -26,6 +26,22 @@ function normalizeSubPath() {
   p = p.replace(/\/+/g, '/');
   props.allSetting.subPath = p;
 }
+
+function parseGeoInfo(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function geoInfoSummary(raw) {
+  const info = parseGeoInfo(raw);
+  if (!info) return '';
+  const kb = (value) => `${(value / 1024).toFixed(1)} KB`;
+  return `geoip.dat ${kb(info.geoipSize)} (${info.geoipCategories} cats), geosite.dat ${kb(info.geositeSize)} (${info.geositeCategories} cats) · ${info.processedAt}`;
+}
 </script>
 
 <template>
@@ -169,6 +185,23 @@ function normalizeSubPath() {
         <template #description>{{ t('pages.settings.subRoutingRulesDesc') }}</template>
         <template #control>
           <a-textarea v-model:value="allSetting.subRoutingRules" placeholder="happ://routing/add/..." />
+          <span v-if="parseGeoInfo(allSetting.subRoutingGeoInfo)" style="font-size: 12px; opacity: .75; display: block; margin-top: 4px;">
+            {{ geoInfoSummary(allSetting.subRoutingGeoInfo) }}
+          </span>
+        </template>
+      </SettingListItem>
+
+      <a-divider>{{ t('pages.settings.subCustomHeadersDivider') }}</a-divider>
+
+      <SettingListItem paddings="small">
+        <template #title>{{ t('pages.settings.subCustomHeaders') }}</template>
+        <template #description>{{ t('pages.settings.subCustomHeadersDesc') }}</template>
+        <template #control>
+          <a-textarea
+            v-model:value="allSetting.subCustomHeaders"
+            :auto-size="{ minRows: 3 }"
+            placeholder="X-Custom-Header: value&#10;Another-Header: value"
+          />
         </template>
       </SettingListItem>
     </a-collapse-panel>
