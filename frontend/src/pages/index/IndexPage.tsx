@@ -131,7 +131,7 @@ export default function IndexPage() {
     if (panelUpdateInfo.updateAvailable || isDevBuild) {
       setPanelUpdateOpen(true);
     } else {
-      window.open('https://github.com/MHSanaei/3x-ui/releases', '_blank', 'noopener,noreferrer');
+      window.open('https://github.com/Shumozavr/3x-ui/releases', '_blank', 'noopener,noreferrer');
     }
   }
 
